@@ -2,17 +2,23 @@ package com.abhi.weather.controller.service;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 import javax.sound.midi.MidiDevice.Info;
 import javax.transaction.Transactional;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
 import com.abhi.weather.controller.domain.Weather;
 import com.abhi.weather.controller.repository.WeatherRepository;
 import com.abhi.weather.model.LocationDTO;
+import com.abhi.weather.model.TempratureDTO;
 import com.abhi.weather.model.WeatherInformationDTO;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonMappingException;
@@ -110,8 +116,8 @@ public class WeatherInformationServiceImpl implements WeatherInformationService 
 		if( null != weatherInformation && weatherInformation.size() > 0 ) {
 			weatherInformation.forEach( information -> {
 				LocalDate recordDate = information.getDateRecorded();
-				if( (recordDate.isEqual(startDate) && recordDate.isAfter(startDate)) 
-						&& (recordDate.isEqual(endDate) && recordDate.isBefore(endDate))) {
+				if( (recordDate.isEqual(startDate) || recordDate.isAfter(startDate)) 
+						&& (recordDate.isEqual(endDate) || recordDate.isBefore(endDate))) {
 					dateFilterWeatherInformation.add(information);
 				}
 			});
@@ -130,6 +136,90 @@ public class WeatherInformationServiceImpl implements WeatherInformationService 
 			
 			weatherRepository.deleteAll(recordsToBeDeleted);
 		}
+	}
+
+	@Override
+	@Transactional
+	public ResponseEntity<List<WeatherInformationDTO>> findByLatAndLonCondition(Float latitude, Float longitude) {
+		List<Weather> weatherInformation = weatherRepository.findAllWeatherInformation();
+		List<WeatherInformationDTO> response = new ArrayList<>();
+		if( null != weatherInformation && weatherInformation.size() > 0 ) {
+			weatherInformation.forEach(information -> {
+				try {
+					LocationDTO locationDTO = this.getLocationDTO(information.getLocation());
+					Float lat = locationDTO.getLatitude();
+					Float lon = locationDTO.getLongitude();
+					
+					if( lat.equals(latitude) && lon.equals(longitude) ) {
+						WeatherInformationDTO weatherInfoDTO = new WeatherInformationDTO();
+						weatherInfoDTO.setDate(information.getDateRecorded());
+						weatherInfoDTO.setId(information.getId());
+						weatherInfoDTO.setLocation(locationDTO);
+						weatherInfoDTO.setTemprature(this.getTempratureDTO(information.getTemprature()));
+						response.add(weatherInfoDTO);
+					}
+					
+				} catch (Exception e) {
+					log.debug("Error parsing JSON");
+				}
+			});
+		}
+		HttpStatus status = response.size() > 0 ? HttpStatus.OK : HttpStatus.NOT_FOUND;
+		ResponseEntity<List<WeatherInformationDTO>> weatherResponse = new ResponseEntity<List<WeatherInformationDTO>>(response, status);	
+		return weatherResponse;
+	}
+
+	private void populateEntityToDto( Weather weather, TempratureDTO tempratureDTO ) {
+		try {
+			LocationDTO locationDTO = this.getLocationDTO(weather.getLocation());
+			Float[] temprature = this.getTempratureDTO(weather.getTemprature());
+			
+			tempratureDTO.setCityName(locationDTO.getCityName());
+			tempratureDTO.setStateName(locationDTO.getStateName());
+			tempratureDTO.setLatitude(locationDTO.getLatitude());
+			tempratureDTO.setLongitude(locationDTO.getLongitude());
+			tempratureDTO.setMaxTemprature(Collections.max(Arrays.asList(temprature)));
+			tempratureDTO.setMinTemprature(Collections.min(Arrays.asList(temprature)));
+			
+		} catch (Exception e) {
+			log.debug("Error parsing json" + e);
+		}
+	}
+	
+	@Override
+	@Transactional
+	public List<TempratureDTO> findMinMaxTemprature(LocalDate startDate, LocalDate endDate) {
+		List<Weather> weatherInformation = weatherRepository.findAllWeatherInformation();
+		List<TempratureDTO> response = new ArrayList<>();
+		if( null != weatherInformation && weatherInformation.size() > 0 ) {
+			weatherInformation.forEach(information->{
+				TempratureDTO tempratureDto = new TempratureDTO();
+				this.populateEntityToDto(information, tempratureDto);
+				if( (information.getDateRecorded().isEqual(startDate) || information.getDateRecorded().isAfter(startDate)) 
+						&& (information.getDateRecorded().isEqual(endDate) || information.getDateRecorded().isBefore(endDate))) {
+					response.add(tempratureDto);
+				}
+			});
+		}
+		
+		if( response.size() > 0 ) {
+			Comparator<TempratureDTO> cityStateNameComparator = new Comparator<TempratureDTO>() {
+				@Override
+				public int compare(TempratureDTO o1, TempratureDTO o2) {
+					int cityCompare = o1.getCityName().compareTo(o2.getCityName());
+					int stateCompare = o1.getStateName().compareTo(o2.getStateName());
+					if (cityCompare == 0) {
+						return ((stateCompare == 0) ? cityCompare : stateCompare);
+					} else {
+						return cityCompare;
+					}
+				}
+			};
+			
+			Collections.sort(response, cityStateNameComparator);
+		}
+		
+		return response;
 	}
 
 }
